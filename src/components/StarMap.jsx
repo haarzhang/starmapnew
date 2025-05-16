@@ -244,20 +244,118 @@ const StarMap = ({ stars, lat, lon, date, showConstellations = true, brightness 
   }, [stars, lat, lon, date, showConstellations, brightness]);
 
   // 下载图片函数
-  const downloadImage = () => {
+  const downloadImage = (withBackground = true) => {
     const canvas = canvasRef.current;
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = CANVAS_SIZE;
     tempCanvas.height = CANVAS_SIZE;
     const tempCtx = tempCanvas.getContext('2d');
 
-    // 直接复制原始画布内容
-    tempCtx.drawImage(canvas, 0, 0);
+    // 清除画布
+    tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+    // 如果需要背景，则绘制背景
+    if (withBackground) {
+      const gradient = tempCtx.createRadialGradient(
+        tempCanvas.width / 2,
+        tempCanvas.height / 2,
+        0,
+        tempCanvas.width / 2,
+        tempCanvas.height / 2,
+        tempCanvas.width / 2
+      );
+      gradient.addColorStop(0, "#0b1a3c");
+      gradient.addColorStop(1, "#1a1a2e");
+      tempCtx.fillStyle = gradient;
+      tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+    }
+
+    // 创建圆形裁剪区域
+    tempCtx.save();
+    tempCtx.beginPath();
+    tempCtx.arc(tempCanvas.width / 2, tempCanvas.height / 2, tempCanvas.width / 2, 0, Math.PI * 2);
+    tempCtx.clip();
+
+    // 重新绘制星星和星座连线
+    const currentDate = new Date(date);
+    
+    // 绘制星座连线
+    if (showConstellations) {
+      tempCtx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+      tempCtx.lineWidth = 1.5;
+      
+      constellationLines.features.forEach(constellation => {
+        const lines = constellation.geometry.coordinates;
+        lines.forEach(line => {
+          tempCtx.beginPath();
+          line.forEach((point, index) => {
+            const [ra, dec] = point;
+            const { alt, az } = equatorialToHorizontal(ra, dec, lat, lon, currentDate);
+            
+            if (alt > 0) {
+              const r = (90 - alt) * (tempCanvas.width / 2 - 10) / 90;
+              const theta = (270 - az) * Math.PI / 180;
+              const x = tempCanvas.width / 2 + r * Math.cos(theta);
+              const y = tempCanvas.height / 2 + r * Math.sin(theta);
+              
+              if (index === 0) {
+                tempCtx.moveTo(x, y);
+              } else {
+                tempCtx.lineTo(x, y);
+              }
+            }
+          });
+          tempCtx.stroke();
+        });
+      });
+    }
+
+    // 绘制星星
+    stars.forEach(star => {
+      const ra = star.ra !== undefined ? star.ra : raToDeg(star.RA);
+      const dec = star.dec !== undefined ? star.dec : decToDeg(star.DEC);
+      const mag = star.mag !== undefined ? star.mag : parseFloat(star.MAG);
+
+      if (mag > 5.5) return;
+
+      const { alt, az } = equatorialToHorizontal(ra, dec, lat, lon, currentDate);
+      if (alt > 0) {
+        const r = (90 - alt) * (tempCanvas.width / 2 - 10) / 90;
+        const theta = (270 - az) * Math.PI / 180;
+        const x = tempCanvas.width / 2 + r * Math.cos(theta);
+        const y = tempCanvas.height / 2 + r * Math.sin(theta);
+        const size = Math.max(1.2, 6.0 * Math.exp(-0.35 * mag)) * starSize;
+
+        const spectral = star.SpectralCls || star["Title HD"] || "";
+        const color = getStarColor(spectral);
+        tempCtx.save();
+        // 1. 绘制径向渐变光晕
+        const glowRadius = size * 3.5;
+        const grad = tempCtx.createRadialGradient(x, y, 0, x, y, glowRadius);
+        grad.addColorStop(0, hexToRgba(color, 0.45));
+        grad.addColorStop(0.4, hexToRgba(color, 0.18));
+        grad.addColorStop(1, hexToRgba(color, 0));
+        tempCtx.beginPath();
+        tempCtx.arc(x, y, glowRadius, 0, 2 * Math.PI);
+        tempCtx.fillStyle = grad;
+        tempCtx.globalAlpha = 1.0;
+        tempCtx.fill();
+        // 2. 绘制星星本体
+        tempCtx.beginPath();
+        tempCtx.arc(x, y, size, 0, 2 * Math.PI);
+        tempCtx.fillStyle = color;
+        tempCtx.globalAlpha = Math.max(1.0, 1.7 - mag * 0.13) * brightness * 1.1;
+        tempCtx.fill();
+        tempCtx.restore();
+      }
+    });
+
+    tempCtx.restore();
 
     // 创建下载链接
     const link = document.createElement('a');
     link.download = `starmap_${new Date().toISOString().slice(0, 10)}.png`;
-    link.href = tempCanvas.toDataURL('image/png', 1.0); // 使用最高质量
+    link.href = tempCanvas.toDataURL('image/png', 1.0);
     link.click();
   };
 
@@ -292,7 +390,7 @@ const StarMap = ({ stars, lat, lon, date, showConstellations = true, brightness 
       }}>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
-            onClick={() => downloadImage()}
+            onClick={() => downloadImage(true)}
             style={{
               padding: '8px 16px',
               backgroundColor: '#d1d1e9',
